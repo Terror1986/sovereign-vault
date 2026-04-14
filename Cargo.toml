@@ -21,6 +21,19 @@ blake3 = "1.5"
 rand = "0.8"
 reed-solomon-erasure = "6.0.0"
 rayon = "1.12.0"
+tokio = { version = "1.51.1", features = ["full"] }
+axum = "0.8.8"
+tower = "0.5.3"
+hyper = "1.9.0"
+bytes = "1.11.1"
+uuid = { version = "1.23.0", features = ["v4"] }
+chrono = "0.4.44"
+quick-xml = "0.39.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+hex = "0.4.3"
+md-5 = "0.11.0"
 
 [profile.release]
 opt-level = 3
@@ -28,3 +41,7 @@ opt-level = 3
 [[bin]]
 name = "benchmark"
 path = "src/bin/benchmark.rs"
+
+[[bin]]
+name = "s3_gateway"
+path = "src/bin/s3_gateway.rs"
