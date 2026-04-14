@@ -45,3 +45,7 @@ path = "src/bin/benchmark.rs"
 [[bin]]
 name = "s3_gateway"
 path = "src/bin/s3_gateway.rs"
+
+[[bin]]
+name = "nanopore_benchmark"
+path = "src/bin/nanopore_benchmark.rs"
