@@ -49,3 +49,7 @@ path = "src/bin/s3_gateway.rs"
 [[bin]]
 name = "nanopore_benchmark"
 path = "src/bin/nanopore_benchmark.rs"
+
+[[bin]]
+name = "profiler"
+path = "src/bin/profiler.rs"
