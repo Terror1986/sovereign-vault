@@ -1,0 +1,30 @@
+[package]
+name = "sovereign_vault"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sovereign_vault"
+path = "src/main.rs"
+
+[[bin]]
+name = "vault"
+path = "src/bin/vault.rs"
+
+[lib]
+name = "sovereign_vault"
+path = "src/lib.rs"
+
+[dependencies]
+raptorq = "2.0"
+blake3 = "1.5"
+rand = "0.8"
+reed-solomon-erasure = "6.0.0"
+rayon = "1.12.0"
+
+[profile.release]
+opt-level = 3
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
