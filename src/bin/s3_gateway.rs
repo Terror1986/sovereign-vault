@@ -40,9 +40,54 @@ struct Store {
 struct AppState {
     store: Arc<RwLock<Store>>,
     storage_dir: String,
+    index_path: String,
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Default)]
+struct StoreIndex {
+    objects: HashMap<String, HashMap<String, ObjectMeta>>,
+    buckets: HashMap<String, String>,
+}
+
+fn load_index(index_path: &str) -> Store {
+    match std::fs::read_to_string(index_path) {
+        Ok(json) => match serde_json::from_str::<StoreIndex>(&json) {
+            Ok(idx) => {
+                let count: usize = idx.objects.values().map(|b| b.len()).sum();
+                println!("  [index] Loaded {} objects across {} buckets",
+                    count, idx.buckets.len());
+                Store { objects: idx.objects, buckets: idx.buckets }
+            }
+            Err(e) => { eprintln!("  [index] Parse error: {}", e); Store::default() }
+        },
+        Err(_) => {
+            println!("  [index] No existing index — starting fresh");
+            Store::default()
+        }
+    }
+}
+
+async fn persist_index(store: &Arc<RwLock<Store>>, index_path: &str) {
+    let s = store.read().await;
+    let idx = StoreIndex {
+        objects: s.objects.clone(),
+        buckets: s.buckets.clone(),
+    };
+    drop(s);
+    match serde_json::to_string_pretty(&idx) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(index_path, json) {
+                eprintln!("  [index] Write error: {}", e);
+            }
+        }
+        Err(e) => eprintln!("  [index] Serialize error: {}", e),
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -52,9 +97,13 @@ async fn main() {
 
     std::fs::create_dir_all(&storage_dir).expect("Cannot create storage dir");
 
+    let index_path = format!("{}/sovereign_index.json", storage_dir);
+    let loaded_store = load_index(&index_path);
+
     let state = AppState {
-        store: Arc::new(RwLock::new(Store::default())),
+        store: Arc::new(RwLock::new(loaded_store)),
         storage_dir,
+        index_path,
     };
 
     println!("\n  ╔══════════════════════════════════════════════════════════╗");
@@ -126,6 +175,7 @@ async fn put_object(
             s.objects.entry(bucket).or_default().insert(key, meta);
 
             println!("  [PUT] -> {}", dna_path);
+            persist_index(&state.store, &state.index_path).await;
 
             let mut h = HeaderMap::new();
             h.insert("ETag", hv(&format!("\"{}\"", etag)));
@@ -206,6 +256,8 @@ async fn delete_object(
             let _ = std::fs::remove_file(&meta.dna_file);
         }
     }
+    drop(s);
+    persist_index(&state.store, &state.index_path).await;
     StatusCode::NO_CONTENT
 }
 
@@ -219,6 +271,8 @@ async fn create_bucket(
     let mut s = state.store.write().await;
     s.buckets.insert(bucket.clone(), Utc::now().to_rfc3339());
     s.objects.entry(bucket).or_default();
+    drop(s);
+    persist_index(&state.store, &state.index_path).await;
     StatusCode::OK
 }
 

@@ -1,0 +1,18 @@
+{
+  "objects": {
+    "testbucket": {
+      "persist_test.json": {
+        "key": "persist_test.json",
+        "bucket": "testbucket",
+        "size": 9130,
+        "etag": "ba3ac2ba5122daa6cc5c620b69922e88",
+        "last_modified": "2026-04-14T01:45:45.468362607+00:00",
+        "dna_file": "./dna_store/testbucket_persist_test.json.dna",
+        "content_type": "application/json"
+      }
+    }
+  },
+  "buckets": {
+    "testbucket": "2026-04-14T02:03:08.105615447+00:00"
+  }
+}
