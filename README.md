@@ -7,8 +7,8 @@ The OS for Zero-Watt Data. A DNA storage middleware stack written in Rust.
 
 | Metric | Value |
 |--------|-------|
-| Peak encode (4 cores) | 1,174 MB/s |
-| Peak decode | 2,843 MB/s |
+| Peak encode (4 cores) | 1,174 MB/s (9.4 Gb/s) |
+| Peak decode | 2,843 MB/s (22.7 Gb/s) |
 | Strand loss tolerance | 20% |
 | Base mutation tolerance | 2% |
 | Indel correction | 3 per strand |
