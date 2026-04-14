@@ -53,3 +53,7 @@ path = "src/bin/nanopore_benchmark.rs"
 [[bin]]
 name = "profiler"
 path = "src/bin/profiler.rs"
+
+[[bin]]
+name = "total_recall"
+path = "src/bin/total_recall.rs"
