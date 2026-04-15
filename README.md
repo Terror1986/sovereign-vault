@@ -1,8 +1,12 @@
+> **PATENT PENDING -- USPTO Application 64/038,618**
+> Filed April 14, 2026. All methods and systems described herein are protected under US patent law. Commercial use without a license is prohibited.
+
 # SovereignFlow Gateway
 
 The OS for Zero-Watt Data. A DNA storage middleware stack written in Rust.
 
 ## Architecture
+
 ## Benchmarks (4-core, release build)
 
 | Metric | Value |
@@ -19,16 +23,12 @@ The OS for Zero-Watt Data. A DNA storage middleware stack written in Rust.
 ```bash
 # Encode any file to DNA instruction set
 ./target/release/vault encode myfile.pdf myfile.dna
-
 # Decode back to original
 ./target/release/vault decode myfile.dna recovered.pdf
-
 # Verify
 diff myfile.pdf recovered.pdf && echo "PERFECT MATCH"
-
 # Run benchmarks
 ./target/release/benchmark
-
 # Run chaos simulation
 ./target/release/sovereign_vault
 ```
@@ -57,7 +57,8 @@ SovereignFlow is designed for environments where data integrity is non-negotiabl
 - **Patent pending** — USPTO provisional 64/038,618
 
 These properties make SovereignFlow directly applicable to:
+
 - Government and defense archival mandates
-- Financial regulatory retention requirements  
+- Financial regulatory retention requirements
 - Intelligence community sovereign data infrastructure
 - Century-scale institutional memory preservation
