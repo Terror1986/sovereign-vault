@@ -1,7 +1,7 @@
 use sovereign_vault::{
     raptor_encode, raptor_decode,
     encode_packet_to_oligos, rs_recover_packet,
-    apply_chaos, sovereign_audit,
+    apply_chaos, sovereign_audit, SovereignIndex,
     RaptorConfig, ChaosConfig,
     hedges::{hedges_encode, hedges_decode, hedges_gc_content, hedges_max_homopolymer},
 };
@@ -70,9 +70,11 @@ fn main() {
 
     let mut all_oligo_groups: Vec<Vec<sovereign_vault::Oligo>> = Vec::new();
     let mut flat_oligos: Vec<Option<sovereign_vault::Oligo>> = Vec::new();
+    let mut sovereign_index: SovereignIndex = SovereignIndex::new();
 
     for (i, packet) in encoded_packets.iter().enumerate() {
-        let oligos = encode_packet_to_oligos(&packet.serialize(), i);
+        let (oligos, pkg_index) = encode_packet_to_oligos(&packet.serialize(), i);
+        sovereign_index.extend(pkg_index);
         for o in &oligos { flat_oligos.push(Some(o.clone())); }
         all_oligo_groups.push(oligos);
     }
@@ -100,7 +102,7 @@ fn main() {
         .collect();
 
     let orig_flat: Vec<sovereign_vault::Oligo> = all_oligo_groups.iter().flatten().cloned().collect();
-    let (verified, tampered) = sovereign_audit(&orig_flat, &corrupted_flat);
+    let (verified, tampered) = sovereign_audit(&sovereign_index, &corrupted_flat);
     println!("  Sovereign Audit: {} intact | {} tampered | {} lost\n",
         verified, tampered, stats.strands_lost);
 
@@ -115,7 +117,7 @@ fn main() {
         corrupted_groups.iter().zip(all_oligo_groups.iter()).enumerate()
     {
         let (packet, confirmed, repaired) = rs_recover_packet(
-            corrupted_group, &encoded_packets[i], original_group,
+            corrupted_group, &encoded_packets[i], original_group, &sovereign_index,
         );
         rs_confirmed += confirmed;
         rs_repaired += repaired;

@@ -20,7 +20,7 @@ use std::time::Instant;
 use sovereign_vault::{
     raptor_encode_silent, raptor_decode,
     RaptorConfig, ChaosConfig,
-    apply_chaos,
+    // apply_chaos,
 };
 use rayon::prelude::*;
 
@@ -94,9 +94,9 @@ fn main() {
     // Twist/Atlas realistic profile
     let chaos = ChaosConfig {
         strand_loss_rate:  0.10,  // 10% strand dropout
-        base_flip_rate:    0.01,  // 1% substitution
-        insertion_rate:    0.005, // 0.5% insertion
-        deletion_rate:     0.005, // 0.5% deletion
+        base_flip_rate:    0.02,  // 1% substitution
+        insertion_rate:    0.025, // 0.5% insertion
+        deletion_rate:     0.05, // 0.5% deletion
     };
 
     println!("  Strand loss:         {:.0}%", chaos.strand_loss_rate * 100.0);
@@ -119,7 +119,6 @@ fn main() {
                     shard_index: 0,
                     original_len: 0,
                     gc_content: 50.0,
-                    sovereign_hash: String::new(),
                 }))
                 .collect();
 

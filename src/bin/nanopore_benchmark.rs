@@ -17,7 +17,7 @@ use sovereign_vault::{
     raptor_encode, raptor_decode,
     encode_packet_to_oligos, rs_recover_packet,
     RaptorConfig, ChaosConfig, DATA_SHARDS, PARITY_SHARDS,
-    apply_chaos, sovereign_audit,
+    apply_chaos, sovereign_audit, SovereignIndex,
 };
 use std::time::Instant;
 
@@ -59,8 +59,10 @@ fn run_trial(data: &[u8], chaos: &ChaosConfig) -> (bool, f64, usize, usize) {
     // Encode to oligo pool
     let mut all_oligo_groups = Vec::new();
     let mut flat_oligos = Vec::new();
+    let mut sovereign_index: SovereignIndex = SovereignIndex::new();
     for (i, packet) in encoded_packets.iter().enumerate() {
-        let oligos = encode_packet_to_oligos(&packet.serialize(), i);
+        let (oligos, pkg_index) = encode_packet_to_oligos(&packet.serialize(), i);
+        sovereign_index.extend(pkg_index);
         for o in &oligos { flat_oligos.push(Some(o.clone())); }
         all_oligo_groups.push(oligos);
     }
@@ -68,7 +70,7 @@ fn run_trial(data: &[u8], chaos: &ChaosConfig) -> (bool, f64, usize, usize) {
     // Apply Nanopore noise
     let (corrupted_flat, stats) = apply_chaos(&flat_oligos, chaos);
     let orig_flat: Vec<_> = all_oligo_groups.iter().flatten().cloned().collect();
-    let (verified, tampered) = sovereign_audit(&orig_flat, &corrupted_flat);
+    let (verified, tampered) = sovereign_audit(&sovereign_index, &corrupted_flat);
 
     // RS recovery
     let shards_per_packet = DATA_SHARDS + PARITY_SHARDS;
@@ -79,7 +81,7 @@ fn run_trial(data: &[u8], chaos: &ChaosConfig) -> (bool, f64, usize, usize) {
 
     let mut recovered_packets = Vec::new();
     for (i, (cg, og)) in corrupted_groups.iter().zip(all_oligo_groups.iter()).enumerate() {
-        let (pkt, _, _) = rs_recover_packet(cg, &encoded_packets[i], og);
+        let (pkt, _, _) = rs_recover_packet(cg, &encoded_packets[i], og, &sovereign_index);
         recovered_packets.push(pkt);
     }
 

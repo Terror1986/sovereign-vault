@@ -2,6 +2,11 @@ use raptorq::{Encoder, EncodingPacket, ObjectTransmissionInformation, Decoder};
 use rand::Rng;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 
+/// Sovereign audit index -- maps (packet_index, shard_index) to BLAKE3 hash.
+/// Stored separately from oligo strands to eliminate per-strand hash overhead.
+pub type SovereignIndex = std::collections::HashMap<(usize, usize), String>;
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1: RaptorQ Erasure Coding (Outer Shield)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,7 +101,6 @@ pub struct Oligo {
     pub shard_index: usize,        // which RS shard this oligo carries
     pub original_len: usize,       // original packet byte length (for RS decode)
     pub gc_content: f32,
-    pub sovereign_hash: String,
 }
 
 pub fn gc_content(seq: &str) -> f32 {
@@ -142,15 +146,17 @@ fn yin_yang_encode(data: &[u8]) -> String {
 
 /// Encode one RaptorQ packet into multiple oligos (one per RS shard).
 /// Each oligo carries one Reed-Solomon shard, so the strand can self-repair.
-pub fn encode_packet_to_oligos(packet_data: &[u8], packet_index: usize) -> Vec<Oligo> {
+pub fn encode_packet_to_oligos(packet_data: &[u8], packet_index: usize) -> (Vec<Oligo>, SovereignIndex) {
     let original_len = packet_data.len();
     let shards = rs_encode(packet_data);
     let mut oligos = Vec::new();
+    let mut index = SovereignIndex::new();
 
     for (shard_index, shard) in shards.iter().enumerate() {
         let h = blake3::hash(shard);
         let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
             h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
+        index.insert((packet_index, shard_index), hash_hex);
 
         let sequence = yin_yang_encode(shard);
         let gc = gc_content(&sequence);
@@ -161,11 +167,10 @@ pub fn encode_packet_to_oligos(packet_data: &[u8], packet_index: usize) -> Vec<O
             shard_index,
             original_len,
             gc_content: gc,
-            sovereign_hash: hash_hex,
         });
     }
 
-    oligos
+    (oligos, index)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,7 +224,6 @@ pub fn apply_chaos(oligos: &[Option<Oligo>], cfg: &ChaosConfig) -> (Vec<Option<O
         result.push(Some(Oligo {
             sequence: s, packet_index: o.packet_index, shard_index: o.shard_index,
             original_len: o.original_len, gc_content: gc,
-            sovereign_hash: o.sovereign_hash.clone()
         }));
     }
     (result, stats)
@@ -229,11 +233,15 @@ pub fn apply_chaos(oligos: &[Option<Oligo>], cfg: &ChaosConfig) -> (Vec<Option<O
 // SECTION 5: Sovereign Audit + Recovery
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn sovereign_audit(original: &[Oligo], post_chaos: &[Option<Oligo>]) -> (usize, usize) {
+pub fn sovereign_audit(index: &SovereignIndex, post_chaos: &[Option<Oligo>]) -> (usize, usize) {
     let (mut ok, mut bad) = (0usize, 0usize);
-    for (orig, chaos) in original.iter().zip(post_chaos.iter()) {
+    for chaos in post_chaos.iter() {
         if let Some(c) = chaos {
-            if c.sovereign_hash == orig.sovereign_hash { ok += 1; } else { bad += 1; }
+            let key = (c.packet_index, c.shard_index);
+            let h = blake3::hash(c.sequence.as_bytes());
+            let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
+                h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
+            if index.get(&key).map_or(false, |v| v == &hash_hex) { ok += 1; } else { bad += 1; }
         }
     }
     (ok, bad)
@@ -245,6 +253,7 @@ pub fn rs_recover_packet(
     oligos: &[Option<Oligo>],
     original_packet: &EncodingPacket,
     original_oligos: &[Oligo],
+    index: &SovereignIndex,
 ) -> (Option<EncodingPacket>, usize, usize) {
     let shard_size = if let Some(Some(o)) = oligos.iter().find(|o| o.is_some()) {
         // Each shard = sequence length / 4 bits per base / 4 bits per byte
@@ -262,9 +271,14 @@ pub fn rs_recover_packet(
         match corrupted {
             None => {} // shard lost — leave as None for RS to reconstruct
             Some(c) => {
-                if c.sovereign_hash == original.sovereign_hash {
+                let key = (original.packet_index, original.shard_index);
+                let h = blake3::hash(c.sequence.as_bytes());
+                let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
+                    h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
+                let expected = index.get(&key).map(|s: &String| s.as_str()).unwrap_or("");
+                if hash_hex == expected {
                     // Hash intact — decode and use directly
-                    let bytes = yin_yang_decode(&original.sequence, shard_size);
+                    let bytes = yin_yang_decode(&c.sequence, shard_size);
                     shards[idx] = Some(bytes);
                     confirmed += 1;
                 } else {
