@@ -13,10 +13,14 @@ The OS for Zero-Watt Data. A DNA storage middleware stack written in Rust.
 |--------|-------|
 | Peak encode (4 cores) | 1,174 MB/s (9.4 Gb/s) |
 | Peak decode | 2,843 MB/s (22.7 Gb/s) |
+| End-to-end code rate | 0.513 bits/base (full HEDGES inline) |
 | Strand loss tolerance | 20% |
 | Base mutation tolerance | 2% |
-| Indel correction | 3 per strand |
-| Recovery accuracy | 100% byte-perfect |
+| Deletion rate tolerance | 5% per base |
+| Indel correction | HEDGES beam search W=64 per strand |
+| Recovery accuracy | 100% byte-perfect at 1GB scale |
+| vs HEDGES paper (Press 2020) | 0.513 vs ~0.5 bits/base + RaptorQ erasure recovery |
+| vs Gungnir (Nature 2026) | 0.513 vs ~0.4 bits/base + S3 gateway + production throughput |
 
 ## Usage
 
