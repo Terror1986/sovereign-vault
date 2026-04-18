@@ -90,9 +90,9 @@ fn main() {
     println!("PHASE 2: CHAOS (realistic synthesis profile)\n");
     let chaos_cfg = ChaosConfig {
         strand_loss_rate: 0.10,  // 10% strand loss
-        base_flip_rate:   0.002, // 0.2% substitution -- realistic synthesis
-        insertion_rate:   0.001, // 0.1% insertion rate
-        deletion_rate:    0.001, // 0.1% deletion rate
+        base_flip_rate:   0.001, // 0.1% substitution -- realistic synthesis
+        insertion_rate:   0.0005, // 0.05% insertion rate
+        deletion_rate:    0.0005, // 0.05% deletion rate
     };
     let (corrupted_flat, stats) = apply_chaos(&flat_oligos, &chaos_cfg);
     let surviving = corrupted_flat.iter().filter(|o| o.is_some()).count();
