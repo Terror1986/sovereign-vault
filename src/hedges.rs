@@ -61,12 +61,12 @@ const BITS_PER_BASE: usize = 1;
 /// Higher = more accurate indel correction, slower decode.
 /// W=64 reliably corrects 3+ indels per strand at real-world error rates.
 /// W=16 is sufficient for <1% indel rates (faster, less memory).
-const BEAM_WIDTH: usize = 64;
+const BEAM_WIDTH: usize = 128;
 
 /// Maximum indel corrections attempted per strand decode.
 /// Prevents the beam search from diverging on heavily corrupted strands.
 /// Strands exceeding this limit are flagged as erasures for RS/RaptorQ.
-const MAX_INDEL_SEARCH_DEPTH: usize = 3;
+const MAX_INDEL_SEARCH_DEPTH: usize = 5;
 
 // ── Base encoding tables ──────────────────────────────────────────────────────
 //
@@ -106,29 +106,30 @@ fn bit_to_base(bit: u8, position: usize, prev_base: u8) -> u8 {
     }
 }
 
-fn base_to_bit(base: u8, position: usize, prev_base: u8) -> Option<u8> {
+pub(crate) fn base_to_bit(base: u8, position: usize, prev_base: u8) -> Option<u8> {
     let sets: [[u8; 2]; 4] = [
         [b'A', b'G'],
         [b'T', b'C'],
         [b'A', b'C'],
         [b'T', b'G'],
     ];
-
     let set_idx = position % 4;
-    let normal_set = sets[set_idx];
-
-    // Check the normal set first (no homopolymer conflict)
-    if base == normal_set[0] && base != prev_base { return Some(0); }
-    if base == normal_set[1] && base != prev_base { return Some(1); }
-
-    // Check the homopolymer-avoidance alternate set
     let alt_set_idx = (set_idx + 2) % 4;
-    let alt_set = sets[alt_set_idx];
-    if base == alt_set[0] { return Some(0); }
-    if base == alt_set[1] { return Some(1); }
-
-    // Base doesn't fit current position under any valid hypothesis.
-    // This signals a likely indel — the beam search will handle it.
+    // Mirror bit_to_base exactly:
+    // For each possible bit value, simulate what base bit_to_base would produce
+    // and check if it matches the observed base.
+    for bit in 0u8..2 {
+        let candidate = sets[set_idx][bit as usize];
+        let actual = if candidate == prev_base {
+            sets[alt_set_idx][bit as usize]
+        } else {
+            candidate
+        };
+        if actual == base {
+            return Some(bit);
+        }
+    }
+    // Base doesn't fit -- likely indel, beam search handles it.
     None
 }
 
@@ -149,7 +150,7 @@ fn base_to_bit(base: u8, position: usize, prev_base: u8) -> Option<u8> {
 // This means two strands encoding the same data produce different ATGC sequences,
 // which prevents systematic errors from affecting multiple strands identically.
 
-fn hedges_pad(state: u64, pos: usize) -> u8 {
+pub(crate) fn hedges_pad(state: u64, pos: usize) -> u8 {
     let mut h = Hasher::new();
     h.update(&state.to_le_bytes());
     h.update(&pos.to_le_bytes());
@@ -158,7 +159,7 @@ fn hedges_pad(state: u64, pos: usize) -> u8 {
     h.finalize().as_bytes()[0] & 1
 }
 
-fn update_state(state: u64, coded_bit: u8, pos: usize) -> u64 {
+pub(crate) fn update_state(state: u64, coded_bit: u8, pos: usize) -> u64 {
     let mut h = Hasher::new();
     h.update(&state.to_le_bytes());
     h.update(&[coded_bit]);
@@ -205,16 +206,20 @@ pub fn hedges_encode(data: &[u8], strand_id: u32) -> Vec<u8> {
             let coded_bit = msg_bit ^ pad;
 
             // Convert coded bit to ATGC base, enforcing biological constraints
-            let base = if bit_to_base(coded_bit, pos, prev_base) == prev_base {
-                // Homopolymer conflict — use alternate rule
-                let alt_coded = coded_bit ^ 1; // try flipping
-                bit_to_base(alt_coded, pos, prev_base)
-            } else {
-                bit_to_base(coded_bit, pos, prev_base)
+            // IMPORTANT: track actual coded bit used after homopolymer avoidance
+            let (base, actual_coded_bit) = {
+                let candidate_base = bit_to_base(coded_bit, pos, prev_base);
+                if candidate_base == prev_base {
+                    // Homopolymer conflict -- flip the coded bit
+                    let alt_coded = coded_bit ^ 1;
+                    (bit_to_base(alt_coded, pos, prev_base), alt_coded)
+                } else {
+                    (candidate_base, coded_bit)
+                }
             };
 
-            // Advance the hash chain state
-            state = update_state(state, coded_bit, pos);
+            // Advance hash chain with ACTUAL coded bit -- encoder/decoder must agree
+            state = update_state(state, actual_coded_bit, pos);
 
             bases.push(base);
             prev_base = base;
@@ -302,8 +307,8 @@ pub fn hedges_decode(bases: &[u8], expected_bytes: usize, strand_id: u32) -> (Ve
 
             // ── Option 1: Normal decode ───────────────────────────────────
             // Consume one base from the sequence, decode one bit.
-            // This is the happy path — no indel correction needed.
-            if hyp.seq_pos < bases.len() {
+            // Happy path -- no indel correction needed.
+            let normal_decode_succeeded = if hyp.seq_pos < bases.len() {
                 let base = bases[hyp.seq_pos];
                 let pad = hedges_pad(hyp.state, hyp.bit_pos);
 
@@ -312,41 +317,25 @@ pub fn hedges_decode(bases: &[u8], expected_bytes: usize, strand_id: u32) -> (Ve
                     let new_state = update_state(hyp.state, coded_bit, hyp.bit_pos);
                     let mut new_bits = hyp.bits.clone();
                     new_bits.push(msg_bit);
-
                     next_beam.push(Hypothesis {
                         bits: new_bits,
                         state: new_state,
                         seq_pos: hyp.seq_pos + 1,
                         bit_pos: hyp.bit_pos + 1,
                         prev_base: base,
-                        score: hyp.score, // no penalty for normal decode
+                        score: hyp.score,
                         indel_corrections: hyp.indel_corrections,
                     });
+                    true
                 } else {
-                    // Base doesn't match hash chain — penalize but continue.
-                    // This path will be pruned if better paths exist.
-                    let pad = hedges_pad(hyp.state, hyp.bit_pos);
-                    let coded_bit = pad;
-                    let new_state = update_state(hyp.state, coded_bit, hyp.bit_pos);
-                    let mut new_bits = hyp.bits.clone();
-                    new_bits.push(0);
-
-                    next_beam.push(Hypothesis {
-                        bits: new_bits,
-                        state: new_state,
-                        seq_pos: hyp.seq_pos + 1,
-                        bit_pos: hyp.bit_pos + 1,
-                        prev_base: base,
-                        score: hyp.score + 1.0, // mismatch penalty
-                        indel_corrections: hyp.indel_corrections,
-                    });
+                    false
                 }
-            }
+            } else { false };
 
-            // ── Option 2: Deletion correction ─────────────────────────────
-            // Skip current base — hypothesis: this base was spuriously
-            // INSERTED during synthesis (not in the original sequence).
-            // We skip it and try decoding from the next base.
+            // ── Option 2: Spurious insertion in sequence ──────────────────
+            // A base was erroneously INSERTED during synthesis.
+            // Skip current base and decode from the next one.
+            // Only explore if normal decode failed or we are in indel search.
             if hyp.indel_corrections < MAX_INDEL_SEARCH_DEPTH
                 && hyp.seq_pos + 1 < bases.len()
             {
@@ -357,41 +346,41 @@ pub fn hedges_decode(bases: &[u8], expected_bytes: usize, strand_id: u32) -> (Ve
                     let new_state = update_state(hyp.state, coded_bit, hyp.bit_pos);
                     let mut new_bits = hyp.bits.clone();
                     new_bits.push(msg_bit);
-
+                    // Higher penalty if normal decode succeeded (less likely indel)
+                    let penalty = if normal_decode_succeeded { 3.0 } else { 2.0 };
                     next_beam.push(Hypothesis {
                         bits: new_bits,
                         state: new_state,
-                        seq_pos: hyp.seq_pos + 2, // skipped one base
+                        seq_pos: hyp.seq_pos + 2,
                         bit_pos: hyp.bit_pos + 1,
                         prev_base: next_base,
-                        score: hyp.score + 2.0, // indel penalty > mismatch penalty
+                        score: hyp.score + penalty,
                         indel_corrections: hyp.indel_corrections + 1,
                     });
                 }
             }
 
-            // ── Option 3: Insertion correction ────────────────────────────
-            // Re-read current base at next bit position — hypothesis: a base
-            // was DELETED from the sequence during synthesis.
-            // We stay at the same sequence position but advance the bit counter.
+            // ── Option 3: Missing base in sequence ────────────────────────
+            // A base was DELETED during synthesis.
+            // Stay at the same sequence position, insert a virtual base.
+            // Try both possible bit values (0 and 1) at this position.
             if hyp.indel_corrections < MAX_INDEL_SEARCH_DEPTH
                 && hyp.seq_pos < bases.len()
             {
-                let base = bases[hyp.seq_pos];
-                let pad = hedges_pad(hyp.state, hyp.bit_pos);
-                if let Some(coded_bit) = base_to_bit(base, hyp.bit_pos + 1, hyp.prev_base) {
-                    let msg_bit = coded_bit ^ pad;
-                    let new_state = update_state(hyp.state, coded_bit, hyp.bit_pos + 1);
+                for virtual_coded_bit in 0u8..2 {
+                    let pad = hedges_pad(hyp.state, hyp.bit_pos);
+                    let msg_bit = virtual_coded_bit ^ pad;
+                    let new_state = update_state(hyp.state, virtual_coded_bit, hyp.bit_pos);
                     let mut new_bits = hyp.bits.clone();
                     new_bits.push(msg_bit);
-
+                    let penalty = if normal_decode_succeeded { 3.0 } else { 2.0 };
                     next_beam.push(Hypothesis {
                         bits: new_bits,
                         state: new_state,
-                        seq_pos: hyp.seq_pos, // didn't advance sequence position
-                        bit_pos: hyp.bit_pos + 2,
-                        prev_base: base,
-                        score: hyp.score + 2.0,
+                        seq_pos: hyp.seq_pos, // stay at same position
+                        bit_pos: hyp.bit_pos + 1,
+                        prev_base: hyp.prev_base,
+                        score: hyp.score + penalty,
                         indel_corrections: hyp.indel_corrections + 1,
                     });
                 }
@@ -421,7 +410,7 @@ pub fn hedges_decode(bases: &[u8], expected_bytes: usize, strand_id: u32) -> (Ve
 
 /// Converts a bit vector to bytes, MSB first.
 /// Pads with zeros if bits don't align to a byte boundary.
-fn bits_to_bytes(bits: &[u8], expected_bytes: usize) -> Vec<u8> {
+pub(crate) fn bits_to_bytes(bits: &[u8], expected_bytes: usize) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(expected_bytes);
     for chunk in bits.chunks(8) {
         if chunk.len() < 8 { break; }
@@ -452,3 +441,191 @@ pub fn hedges_max_homopolymer(bases: &[u8]) -> usize {
     }
     max
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_roundtrip_simple() {
+        let data = b"Hi";
+        let strand_id = 0u32;
+        let encoded = hedges_encode(data, strand_id);
+        println!("Encoded {} bytes to {} bases: {}", 
+            data.len(), encoded.len(),
+            std::str::from_utf8(&encoded).unwrap());
+        let (decoded, _) = hedges_decode(&encoded, data.len(), strand_id);
+        println!("Decoded:  {:?}", decoded);
+        println!("Expected: {:?}", data.as_ref());
+        assert_eq!(decoded, data.as_ref(), "Roundtrip failed");
+    }
+}
+
+    #[test]
+    fn test_roundtrip_trace() {
+        // Trace the hash chain for a single byte
+        let data = b"i"; // just the second byte that fails = 105 = 0b01101001
+        let strand_id = 0u32;
+        
+        // Manually trace encoder
+        let mut h = blake3::Hasher::new();
+        h.update(&strand_id.to_le_bytes());
+        let mut state = u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().unwrap());
+        
+        println!("Initial state: {}", state);
+        println!("Encoding byte: {} = {:08b}", data[0], data[0]);
+        
+        let encoded = hedges_encode(data, strand_id);
+        println!("Encoded: {}", std::str::from_utf8(&encoded).unwrap());
+        
+        let (decoded, _) = hedges_decode(&encoded, data.len(), strand_id);
+        println!("Decoded: {:?} expected: {:?}", decoded, data.as_ref());
+        println!("Match: {}", decoded == data.as_ref());
+    }
+
+    #[test]
+    fn test_trace_detailed() {
+        let data = b"Hi";
+        let strand_id = 0u32;
+        let encoded = hedges_encode(data, strand_id);
+        println!("Full encoded sequence: {}", std::str::from_utf8(&encoded).unwrap());
+        println!("Length: {} bases for {} bytes", encoded.len(), data.len());
+        
+        // Now manually verify each base
+        let mut h = blake3::Hasher::new();
+        h.update(&strand_id.to_le_bytes());
+        let mut state = u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().unwrap());
+        let mut prev_base = b'N';
+        
+        for (byte_idx, byte) in data.iter().enumerate() {
+            for bit_idx in (0..8).rev() {
+                let pos = byte_idx * 8 + (7 - bit_idx);
+                let msg_bit = (byte >> bit_idx) & 1;
+                let pad = {
+                    let mut h = blake3::Hasher::new();
+                    h.update(&state.to_le_bytes());
+                    h.update(&pos.to_le_bytes());
+                    h.finalize().as_bytes()[0] & 1
+                };
+                let coded_bit = msg_bit ^ pad;
+                let expected_base = encoded[pos];
+                println!("pos={} msg_bit={} pad={} coded_bit={} base={} expected={}", 
+                    pos, msg_bit, pad, coded_bit, 
+                    encoded[pos] as char, expected_base as char);
+                // Update state
+                let mut h = blake3::Hasher::new();
+                h.update(&state.to_le_bytes());
+                h.update(&[coded_bit]);
+                h.update(&pos.to_le_bytes());
+                state = u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().unwrap());
+                prev_base = expected_base;
+            }
+        }
+    }
+
+    #[test]
+    fn test_decoder_state() {
+        // Test multiple simple values to find pattern
+        for val in [0u8, 1, 72, 105, 255] {
+            let data = vec![val];
+            let strand_id = 0u32;
+            let encoded = hedges_encode(&data, strand_id);
+            let (decoded, _) = hedges_decode(&encoded, data.len(), strand_id);
+            println!("val={} encoded={} decoded={:?} match={}", 
+                val,
+                std::str::from_utf8(&encoded).unwrap_or("?"),
+                decoded,
+                decoded == data);
+        }
+        // Test two bytes
+        let data = b"Hi".to_vec();
+        let encoded = hedges_encode(&data, 0);
+        let (decoded, _) = hedges_decode(&encoded, data.len(), 0);
+        println!("Hi: encoded={} decoded={:?} match={}", 
+            std::str::from_utf8(&encoded).unwrap_or("?"),
+            decoded, decoded == data);
+    }
+
+    #[test]
+    fn test_decode_val1() {
+        let data = vec![1u8]; // 00000001 -- only last bit is 1
+        let strand_id = 0u32;
+        let encoded = hedges_encode(&data, strand_id);
+        println!("Encoding val=1: {}", std::str::from_utf8(&encoded).unwrap());
+        
+        // Manually decode using internal functions directly
+        let mut h = blake3::Hasher::new();
+        h.update(&strand_id.to_le_bytes());
+        let mut state = u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().unwrap());
+        let mut prev_base = b'N';
+        let mut bits = Vec::new();
+        
+        for pos in 0..8usize {
+            let base = encoded[pos];
+            let pad = hedges_pad(state, pos);
+            let coded_bit_opt = base_to_bit(base, pos, prev_base);
+            println!("  pos={} base={} pad={} coded_bit={:?}", 
+                pos, base as char, pad, coded_bit_opt);
+            if let Some(coded_bit) = coded_bit_opt {
+                let msg_bit = coded_bit ^ pad;
+                bits.push(msg_bit);
+                state = update_state(state, coded_bit, pos);
+                prev_base = base;
+            }
+        }
+        
+        let decoded = bits_to_bytes(&bits, 1);
+        println!("Bits: {:?}", bits);
+        println!("Decoded: {:?} expected: [1]", decoded);
+    }
+
+    #[test]
+    fn test_beam_vs_manual() {
+        // If manual decode works but hedges_decode fails,
+        // the bug is in the beam search
+        for val in [1u8, 72, 105] {
+            let data = vec![val];
+            let strand_id = 0u32;
+            let encoded = hedges_encode(&data, strand_id);
+            
+            // Manual decode
+            let mut h = blake3::Hasher::new();
+            h.update(&strand_id.to_le_bytes());
+            let mut state = u64::from_le_bytes(
+                h.finalize().as_bytes()[..8].try_into().unwrap()
+            );
+            let mut prev_base = b'N';
+            let mut bits = Vec::new();
+            for pos in 0..8usize {
+                let base = encoded[pos];
+                let pad = hedges_pad(state, pos);
+                if let Some(coded_bit) = base_to_bit(base, pos, prev_base) {
+                    let msg_bit = coded_bit ^ pad;
+                    bits.push(msg_bit);
+                    state = update_state(state, coded_bit, pos);
+                    prev_base = base;
+                }
+            }
+            let manual = bits_to_bytes(&bits, 1);
+            
+            // Beam search decode
+            let (beam, _) = hedges_decode(&encoded, data.len(), strand_id);
+            
+            println!("val={} manual={:?} beam={:?} manual_ok={} beam_ok={}", 
+                val, manual, beam, 
+                manual == data,
+                beam == data);
+        }
+    }
+
+    #[test]
+    fn test_beam_winner() {
+        let data = vec![1u8];
+        let strand_id = 0u32;
+        let encoded = hedges_encode(&data, strand_id);
+        println!("encoded len={} expected_bits={}", encoded.len(), data.len() * 8);
+        // The beam search should find a winner when bit_pos >= 8
+        // Let's check what bit_pos values are being tracked
+        let (decoded, indels) = hedges_decode(&encoded, data.len(), strand_id);
+        println!("decoded={:?} indels={}", decoded, indels);
+    }

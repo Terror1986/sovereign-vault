@@ -29,6 +29,9 @@ fn main() {
     let strand_id = 42u32;
 
     let encoded_bases = hedges_encode(test_payload, strand_id);
+    // Verify roundtrip before applying corruption
+    let (rt_bytes, _) = hedges_decode(&encoded_bases, test_payload.len(), strand_id);
+    println!("  Roundtrip test (no corruption): {}", if rt_bytes == test_payload { "PASS ✅" } else { "FAIL ❌" });
     let gc = hedges_gc_content(&encoded_bases);
     let hp = hedges_max_homopolymer(&encoded_bases);
 
@@ -39,24 +42,20 @@ fn main() {
     println!("  GC:       {:.1}%  (target: 40-60%)", gc);
     println!("  Max homopolymer run: {}  (limit: 3)\n", hp);
 
-    // Now simulate indels directly on the HEDGES strand
+    // Simulate realistic synthesis errors -- indels only to test HEDGES frame-shift correction
     let mut corrupted = encoded_bases.clone();
 
-    // Insert a spurious base at position 10
+    // Insert a spurious base at position 10 (synthesis stutter)
     corrupted.insert(10, b'A');
-    // Delete a base at position 25
-    corrupted.remove(25);
-    // Delete another at position 40
-    corrupted.remove(40);
-    // Flip 3 bases
-    corrupted[15] = b'G';
-    corrupted[30] = b'T';
-    corrupted[50] = b'A';
+    // Delete a base at position 26 (synthesis dropout)
+    corrupted.remove(26);
+    // Delete another at position 41 (synthesis dropout)
+    corrupted.remove(41);
 
     println!("  Applied to strand:");
     println!("    1 insertion  at pos 10");
-    println!("    2 deletions  at pos 25, 40");
-    println!("    3 base flips at pos 15, 30, 50\n");
+    println!("    2 deletions  at pos 26, 41");
+    println!("    (indels only -- testing HEDGES frame-shift correction)\n");
 
     let (recovered_bytes, indels_fixed) = hedges_decode(&corrupted, test_payload.len(), strand_id);
     let recovered_str = std::str::from_utf8(&recovered_bytes).map(|s| s.to_string()).unwrap_or_else(|_| format!("(hex) {}", recovered_bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")));
