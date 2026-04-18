@@ -1,0 +1,77 @@
+# SovereignFlow Gateway Configuration
+# Tune these parameters to match your synthesis hardware profile
+
+[raptor]
+# Redundancy ratio for RaptorQ fountain code
+# Higher = more erasure tolerance, lower code rate
+# 0.10 = 10% redundancy (higher density, less protection)
+# 0.30 = 30% redundancy (recommended for most hardware)
+# 0.50 = 50% redundancy (maximum protection)
+redundancy_ratio = 0.30
+
+[reed_solomon]
+# Reed-Solomon shard configuration
+# data_shards + parity_shards = total shards per packet
+# parity_shards = number of shards that can be lost/corrupted
+data_shards = 4
+parity_shards = 2
+
+[hedges]
+# HEDGES beam search configuration
+# beam_width = number of simultaneous decoding hypotheses
+# Higher = more accurate indel correction, slower decode
+# 16  = sufficient for <1% indel rates
+# 64  = recommended for 1-5% indel rates
+# 128 = for high indel environments (>5%)
+beam_width = 64
+
+# HEDGES coding rate (bits per base before RS/RaptorQ overhead)
+# 1.0 = maximum indel protection (recommended)
+# 1.5 = higher density, less indel protection
+# 2.0 = no indel protection (Yin-Yang only)
+rate = 1.0
+
+[oligo]
+# Target oligo length in bases
+# Must account for primer lengths at each end
+# Atlas Eon 100: up to 160 bases total
+# Typical primer overhead: 20-40 bases
+# Recommended payload: 120-140 bases
+target_length = 160
+payload_bases = 128
+
+# Biological constraints
+min_gc_content = 0.40
+max_gc_content = 0.60
+max_homopolymer_run = 3
+
+[index]
+# Sovereign audit index configuration
+# memory   = fast, limited to ~10GB of strand data
+# rocksdb  = persistent, scales to 1TB+ (recommended for production)
+backend = "memory"
+
+# Path for persistent index (used when backend = "rocksdb")
+index_path = "./sovereign_index"
+
+# Index compression
+# Reduces index size by ~60% at small CPU cost
+compress = true
+
+[chaos]
+# Error simulation parameters
+# Set these to match your hardware's actual error profile
+# Leave at defaults for standard validation runs
+strand_loss_rate = 0.10
+substitution_rate = 0.02
+insertion_rate    = 0.005
+deletion_rate     = 0.005
+
+[throughput]
+# Number of CPU threads for parallel encoding
+# 0 = use all available cores
+threads = 0
+
+# Chunk size for large file processing (bytes)
+# Larger chunks = better throughput, more memory usage
+chunk_size_mb = 256

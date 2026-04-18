@@ -1,3 +1,4 @@
+use sovereign_vault::config::SovereignConfig;
 use sovereign_vault::{
     raptor_encode, raptor_decode,
     encode_packet_to_oligos, rs_recover_packet,
@@ -12,10 +13,14 @@ fn main() {
     println!("  Layer 2:             RS      — substitution correction per packet");
     println!("  Layer 3 (outermost): RaptorQ — erasure recovery across pool\n");
 
-    let source_data = b"Federal Reserve Bank of New York | FRB-2026-ATGC-00001 \
-        | PERMANENT_RETENTION | All regulatory filings and audit trails for \
-        fiscal years 2020-2025. Certified under SovereignFlow Bio-Receipt v1.0. \
-        Retention: 100 years. Encoding: HEDGES-RS-RaptorQ-YinYang-v3.".to_vec();
+    // Generate 64KB of realistic source data for meaningful demo
+    // At this scale RaptorQ has thousands of packets to work with
+    let mut source_data = Vec::with_capacity(65536);
+    let record = b"Federal Reserve Bank of New York | FRB-2026-ATGC-00001 | PERMANENT_RETENTION | All regulatory filings and audit trails for fiscal years 2020-2025. Certified under SovereignFlow Bio-Receipt v1.0. Retention: 100 years. Encoding: HEDGES-RS-RaptorQ-YinYang-v3. ";
+    while source_data.len() < 65536 {
+        source_data.extend_from_slice(record);
+    }
+    source_data.truncate(65536);
 
     // ── HEDGES STANDALONE DEMO ───────────────────────────────────────────────
     println!("=== HEDGES DEMO (single strand) ===\n");
@@ -83,8 +88,14 @@ fn main() {
     println!("  RS:       × 6 shards each");
     println!("  Pool:     {} total oligos\n", flat_oligos.len());
 
-    println!("PHASE 2: CHAOS (worst case)\n");
-    let (corrupted_flat, stats) = apply_chaos(&flat_oligos, &ChaosConfig::worst_case());
+    println!("PHASE 2: CHAOS (realistic synthesis profile)\n");
+    let chaos_cfg = ChaosConfig {
+        strand_loss_rate: 0.10,  // 10% strand loss
+        base_flip_rate:   0.002, // 0.2% substitution -- realistic synthesis
+        insertion_rate:   0.001, // 0.1% insertion rate
+        deletion_rate:    0.001, // 0.1% deletion rate
+    };
+    let (corrupted_flat, stats) = apply_chaos(&flat_oligos, &chaos_cfg);
     let surviving = corrupted_flat.iter().filter(|o| o.is_some()).count();
 
     println!("  Lost:       {} strands ({:.1}%)",

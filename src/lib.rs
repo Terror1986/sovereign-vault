@@ -1,3 +1,5 @@
+pub mod config;
+pub mod hedges;
 use raptorq::{Encoder, EncodingPacket, ObjectTransmissionInformation, Decoder};
 use rand::Rng;
 use reed_solomon_erasure::galois_8::ReedSolomon;
@@ -153,12 +155,15 @@ pub fn encode_packet_to_oligos(packet_data: &[u8], packet_index: usize) -> (Vec<
     let mut index = SovereignIndex::new();
 
     for (shard_index, shard) in shards.iter().enumerate() {
-        let h = blake3::hash(shard);
+        // Use HEDGES as inner codec for indel correction at strand level
+        let strand_id = (packet_index * (DATA_SHARDS + PARITY_SHARDS) + shard_index) as u32;
+        let bases = hedges::hedges_encode(shard, strand_id);
+        let sequence = String::from_utf8(bases).unwrap_or_default();
+        // Hash sequence AFTER HEDGES encoding for consistent audit comparison
+        let h = blake3::hash(sequence.as_bytes());
         let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
             h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
         index.insert((packet_index, shard_index), hash_hex);
-
-        let sequence = yin_yang_encode(shard);
         let gc = gc_content(&sequence);
 
         oligos.push(Oligo {
@@ -256,8 +261,9 @@ pub fn rs_recover_packet(
     index: &SovereignIndex,
 ) -> (Option<EncodingPacket>, usize, usize) {
     let shard_size = if let Some(Some(o)) = oligos.iter().find(|o| o.is_some()) {
-        // Each shard = sequence length / 4 bits per base / 4 bits per byte
-        o.sequence.len() / 4
+        // HEDGES encodes 1 bit per base, so 1 byte = 8 bases
+        // sequence.len() / 8 = original shard bytes
+        o.sequence.len() / 8
     } else {
         return (None, 0, 0);
     };
@@ -272,19 +278,38 @@ pub fn rs_recover_packet(
             None => {} // shard lost — leave as None for RS to reconstruct
             Some(c) => {
                 let key = (original.packet_index, original.shard_index);
+                let strand_id = (original.packet_index * (DATA_SHARDS + PARITY_SHARDS) + original.shard_index) as u32;
                 let h = blake3::hash(c.sequence.as_bytes());
                 let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
                     h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
                 let expected = index.get(&key).map(|s: &String| s.as_str()).unwrap_or("");
                 if hash_hex == expected {
-                    // Hash intact — decode and use directly
-                    let bytes = yin_yang_decode(&c.sequence, shard_size);
+                    // Hash intact -- decode with HEDGES directly
+                    let (bytes, _) = hedges::hedges_decode(c.sequence.as_bytes(), shard_size, strand_id);
                     shards[idx] = Some(bytes);
                     confirmed += 1;
                 } else {
-                    // Hash mismatch — strand mutated, mark as erasure
-                    shards[idx] = None;
-                    repaired += 1;
+                    // Hash mismatch -- attempt HEDGES correction before marking as erasure
+                    // HEDGES beam search may recover the original shard despite indels
+                    let (recovered_bytes, indels_fixed) = hedges::hedges_decode(
+                        c.sequence.as_bytes(), shard_size, strand_id
+                    );
+                    // Verify recovery by re-encoding and checking hash
+                    let re_encoded = hedges::hedges_encode(&recovered_bytes, strand_id);
+                    let re_seq = String::from_utf8(re_encoded).unwrap_or_default();
+                    let verify_h = blake3::hash(re_seq.as_bytes());
+                    let verify_hex = format!("{:02x}{:02x}{:02x}{:02x}",
+                        verify_h.as_bytes()[0], verify_h.as_bytes()[1],
+                        verify_h.as_bytes()[2], verify_h.as_bytes()[3]);
+                    if verify_hex == expected {
+                        // HEDGES successfully recovered the shard
+                        shards[idx] = Some(recovered_bytes);
+                        confirmed += 1;
+                    } else {
+                        // HEDGES could not recover -- mark as erasure for RS
+                        shards[idx] = None;
+                        repaired += 1;
+                    }
                 }
             }
         }
@@ -327,7 +352,6 @@ fn yin_yang_decode(seq: &str, expected_bytes: usize) -> Vec<u8> {
     bytes
 }
 
-pub mod hedges;
 pub use raptorq;
 
 /// Silent version of raptor_encode for benchmarking (no stdout).
