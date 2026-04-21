@@ -32,6 +32,7 @@ quick-xml = "0.39.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 toml = "0.8"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 sha2 = "0.11.0"
 hex = "0.4.3"
 md-5 = "0.11.0"
@@ -58,3 +59,7 @@ path = "src/bin/profiler.rs"
 [[bin]]
 name = "total_recall"
 path = "src/bin/total_recall.rs"
+
+[[bin]]
+name = "twist_test"
+path = "src/bin/twist_test.rs"
