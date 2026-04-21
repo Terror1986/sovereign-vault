@@ -1,3 +1,4 @@
+pub mod persistent_index;
 pub mod twist_api;
 pub mod config;
 pub mod hedges;

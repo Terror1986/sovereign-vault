@@ -47,9 +47,9 @@ max_homopolymer_run = 3
 
 [index]
 # Sovereign audit index configuration
-# memory   = fast, limited to ~10GB of strand data
+# memory   = fast, limited to ~10GB of strand data (default for demos)
 # rocksdb  = persistent, scales to 1TB+ (recommended for production)
-backend = "memory"
+backend = "rocksdb"
 
 # Path for persistent index (used when backend = "rocksdb")
 index_path = "./sovereign_index"
@@ -57,6 +57,10 @@ index_path = "./sovereign_index"
 # Index compression
 # Reduces index size by ~60% at small CPU cost
 compress = true
+
+# Estimated scale target
+# memory:  ~1GB max before RAM pressure
+# rocksdb: tested to 1TB+ with billions of entries
 
 [chaos]
 # Error simulation parameters
