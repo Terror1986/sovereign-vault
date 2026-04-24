@@ -1,28 +1,17 @@
-//! Twist TAPI Connection Test
-//! 
-//! Tests API connectivity and sequence synthesizability.
-//! 
-//! Usage:
-//!   TWIST_JWT=your_jwt TWIST_EUT=your_end_user_token cargo run --bin twist_test
+use std::env;
 
 fn main() {
-    let jwt = std::env::var("TWIST_JWT").unwrap_or_else(|_| {
-        eprintln!("Set TWIST_JWT environment variable");
-        std::process::exit(1);
-    });
-    
-    let eut = std::env::var("TWIST_EUT").unwrap_or_else(|_| {
-        eprintln!("Set TWIST_EUT environment variable");
-        std::process::exit(1);
-    });
-
-    let email = "matthew.schoville@gmail.com";
-
-    println!("\n  SOVEREIGNFLOW — TWIST TAPI VALIDATION");
-    println!("  =======================================\n");
-
-    match sovereign_vault::twist_api::validate_sovereign_sequences(&jwt, &eut, email) {
-        Ok(()) => println!("\n✅ Twist integration validated successfully"),
-        Err(e) => println!("\n❌ Validation failed: {}", e),
+    let jwt = match env::var("TWIST_JWT") {
+        Ok(v) => v,
+        Err(_) => { eprintln!("Set TWIST_JWT env var"); std::process::exit(1); }
+    };
+    let eut = match env::var("TWIST_EUT") {
+        Ok(v) => v,
+        Err(_) => { eprintln!("Set TWIST_EUT env var"); std::process::exit(1); }
+    };
+    println!("Testing Twist API...");
+    match sovereign_vault::twist_api::validate_sovereign_sequences(&jwt, &eut, "matthew.schoville@gmail.com") {
+        Ok(()) => println!("SUCCESS"),
+        Err(e) => println!("FAILED: {}", e),
     }
 }

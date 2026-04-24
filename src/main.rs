@@ -94,7 +94,28 @@ fn main() {
         insertion_rate:   0.0005, // 0.05% insertion rate
         deletion_rate:    0.0005, // 0.05% deletion rate
     };
+    // Print sample oligos BEFORE chaos for Dominique
+    println!("SAMPLE OLIGOS BEFORE CHAOS:");
+    for (i, oligo) in flat_oligos.iter().take(3).enumerate() {
+        if let Some(o) = oligo {
+            println!("  Strand {}: {}...({} bases)", 
+                i, &o.sequence[..60.min(o.sequence.len())], o.sequence.len());
+        }
+    }
+    println!();
+
     let (corrupted_flat, stats) = apply_chaos(&flat_oligos, &chaos_cfg);
+
+    // Print same oligos AFTER chaos
+    println!("SAMPLE OLIGOS AFTER CHAOS:");
+    for (i, oligo) in corrupted_flat.iter().take(3).enumerate() {
+        match oligo {
+            Some(o) => println!("  Strand {}: {}...({} bases)", 
+                i, &o.sequence[..60.min(o.sequence.len())], o.sequence.len()),
+            None => println!("  Strand {}: LOST (strand loss)", i),
+        }
+    }
+    println!();
     let surviving = corrupted_flat.iter().filter(|o| o.is_some()).count();
 
     println!("  Lost:       {} strands ({:.1}%)",
