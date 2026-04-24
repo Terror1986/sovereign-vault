@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use sovereign_vault::config::SovereignConfig;
 use sovereign_vault::{
     raptor_encode, raptor_decode,
@@ -139,17 +140,23 @@ fn main() {
 
     println!("PHASE 3: RECOVERY\n");
     println!("  Step 1 — RS repair...");
+    let rs_start = std::time::Instant::now();
     let mut rs_confirmed = 0usize;
     let mut rs_repaired = 0usize;
     let mut rs_failed = 0usize;
     let mut recovered_packets: Vec<Option<raptorq::EncodingPacket>> = Vec::new();
 
-    for (i, (corrupted_group, original_group)) in
-        corrupted_groups.iter().zip(all_oligo_groups.iter()).enumerate()
-    {
-        let (packet, confirmed, repaired) = rs_recover_packet(
-            corrupted_group, &encoded_packets[i], original_group, &sovereign_index,
-        );
+    // Parallel RS+HEDGES recovery across all packet groups using Rayon
+    let results: Vec<(Option<raptorq::EncodingPacket>, usize, usize)> =
+        corrupted_groups.par_iter()
+        .zip(all_oligo_groups.par_iter())
+        .zip(encoded_packets.par_iter())
+        .map(|((corrupted_group, original_group), encoded_packet)| {
+            rs_recover_packet(corrupted_group, encoded_packet, original_group, &sovereign_index)
+        })
+        .collect();
+
+    for (packet, confirmed, repaired) in results {
         rs_confirmed += confirmed;
         rs_repaired += repaired;
         if packet.is_none() { rs_failed += 1; }
@@ -158,6 +165,8 @@ fn main() {
 
     println!("    Confirmed: {}  |  Repaired: {}  |  Failed: {}",
         rs_confirmed, rs_repaired, rs_failed);
+    let rs_time = rs_start.elapsed();
+    println!("    RS+HEDGES time: {:.2?}", rs_time);
 
     let usable = recovered_packets.iter().filter(|p| p.is_some()).count();
     println!("  Step 2 — RaptorQ: {}/{} packets usable", usable, recovered_packets.len());

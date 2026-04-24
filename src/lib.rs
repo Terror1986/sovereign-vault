@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+pub mod hedges_gpu;
 pub mod gpu_accel;
 pub mod persistent_index;
 pub mod twist_api;
@@ -275,46 +277,52 @@ pub fn rs_recover_packet(
     let mut repaired = 0usize;
     let mut confirmed = 0usize;
 
-    for (corrupted, original) in oligos.iter().zip(original_oligos.iter()) {
-        let idx = original.shard_index;
-        match corrupted {
-            None => {} // shard lost — leave as None for RS to reconstruct
-            Some(c) => {
-                let key = (original.packet_index, original.shard_index);
-                let strand_id = (original.packet_index * (DATA_SHARDS + PARITY_SHARDS) + original.shard_index) as u32;
-                let h = blake3::hash(c.sequence.as_bytes());
-                let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
-                    h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
-                let expected = index.get(&key).map(|s: &String| s.as_str()).unwrap_or("");
-                if hash_hex == expected {
-                    // Hash intact -- decode with HEDGES directly
-                    let (bytes, _) = hedges::hedges_decode(c.sequence.as_bytes(), shard_size, strand_id);
-                    shards[idx] = Some(bytes);
-                    confirmed += 1;
-                } else {
-                    // Hash mismatch -- attempt HEDGES correction before marking as erasure
-                    // HEDGES beam search may recover the original shard despite indels
-                    let (recovered_bytes, indels_fixed) = hedges::hedges_decode(
-                        c.sequence.as_bytes(), shard_size, strand_id
-                    );
-                    // Verify recovery by re-encoding and checking hash
-                    let re_encoded = hedges::hedges_encode(&recovered_bytes, strand_id);
-                    let re_seq = String::from_utf8(re_encoded).unwrap_or_default();
-                    let verify_h = blake3::hash(re_seq.as_bytes());
-                    let verify_hex = format!("{:02x}{:02x}{:02x}{:02x}",
-                        verify_h.as_bytes()[0], verify_h.as_bytes()[1],
-                        verify_h.as_bytes()[2], verify_h.as_bytes()[3]);
-                    if verify_hex == expected {
-                        // HEDGES successfully recovered the shard
-                        shards[idx] = Some(recovered_bytes);
-                        confirmed += 1;
+    // Parallel HEDGES decode across all strands using Rayon
+    // Each strand is completely independent -- perfect for parallelism
+    let results: Vec<(usize, Option<Vec<u8>>, bool)> = oligos.par_iter()
+        .zip(original_oligos.par_iter())
+        .map(|(corrupted, original)| {
+            let idx = original.shard_index;
+            match corrupted {
+                None => (idx, None, false),
+                Some(c) => {
+                    let key = (original.packet_index, original.shard_index);
+                    let strand_id = (original.packet_index * (DATA_SHARDS + PARITY_SHARDS) + original.shard_index) as u32;
+                    let h = blake3::hash(c.sequence.as_bytes());
+                    let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}",
+                        h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]);
+                    let expected_hash = index.get(&key).map(|s: &String| s.clone()).unwrap_or_default();
+                    if hash_hex == expected_hash {
+                        let (bytes, _) = hedges::hedges_decode(c.sequence.as_bytes(), shard_size, strand_id);
+                        (idx, Some(bytes), true)
                     } else {
-                        // HEDGES could not recover -- mark as erasure for RS
-                        shards[idx] = None;
-                        repaired += 1;
+                        let (recovered_bytes, _indels_fixed) = hedges::hedges_decode(
+                            c.sequence.as_bytes(), shard_size, strand_id
+                        );
+                        let re_encoded = hedges::hedges_encode(&recovered_bytes, strand_id);
+                        let re_seq = String::from_utf8(re_encoded).unwrap_or_default();
+                        let verify_h = blake3::hash(re_seq.as_bytes());
+                        let verify_hex = format!("{:02x}{:02x}{:02x}{:02x}",
+                            verify_h.as_bytes()[0], verify_h.as_bytes()[1],
+                            verify_h.as_bytes()[2], verify_h.as_bytes()[3]);
+                        if verify_hex == expected_hash {
+                            (idx, Some(recovered_bytes), true)
+                        } else {
+                            (idx, None, false)
+                        }
                     }
                 }
             }
+        })
+        .collect();
+
+    // Merge parallel results
+    for (idx, shard, is_confirmed) in results {
+        shards[idx] = shard;
+        if is_confirmed {
+            confirmed += 1;
+        } else {
+            repaired += 1;
         }
     }
 

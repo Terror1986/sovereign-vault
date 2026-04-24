@@ -254,10 +254,10 @@ pub fn hedges_encode(data: &[u8], strand_id: u32) -> Vec<u8> {
 struct Hypothesis {
     bits: Vec<u8>,
     state: u64,
-    seq_pos: usize,   // position in the ATGC sequence
-    bit_pos: usize,   // position in the bit stream
+    seq_pos: usize,
+    bit_pos: usize,
     prev_base: u8,
-    score: f64,       // accumulated error penalty (lower = better)
+    score: f64,
     indel_corrections: usize,
 }
 
@@ -344,10 +344,10 @@ pub fn hedges_decode(bases: &[u8], expected_bytes: usize, strand_id: u32) -> (Ve
                 if let Some(coded_bit) = base_to_bit(next_base, hyp.bit_pos, hyp.prev_base) {
                     let msg_bit = coded_bit ^ pad;
                     let new_state = update_state(hyp.state, coded_bit, hyp.bit_pos);
-                    let mut new_bits = hyp.bits.clone();
-                    new_bits.push(msg_bit);
                     // Higher penalty if normal decode succeeded (less likely indel)
                     let penalty = if normal_decode_succeeded { 3.0 } else { 2.0 };
+                    let mut new_bits = hyp.bits.clone();
+                    new_bits.push(msg_bit);
                     next_beam.push(Hypothesis {
                         bits: new_bits,
                         state: new_state,
@@ -371,13 +371,13 @@ pub fn hedges_decode(bases: &[u8], expected_bytes: usize, strand_id: u32) -> (Ve
                     let pad = hedges_pad(hyp.state, hyp.bit_pos);
                     let msg_bit = virtual_coded_bit ^ pad;
                     let new_state = update_state(hyp.state, virtual_coded_bit, hyp.bit_pos);
+                    let penalty = if normal_decode_succeeded { 3.0 } else { 2.0 };
                     let mut new_bits = hyp.bits.clone();
                     new_bits.push(msg_bit);
-                    let penalty = if normal_decode_succeeded { 3.0 } else { 2.0 };
                     next_beam.push(Hypothesis {
                         bits: new_bits,
                         state: new_state,
-                        seq_pos: hyp.seq_pos, // stay at same position
+                        seq_pos: hyp.seq_pos,
                         bit_pos: hyp.bit_pos + 1,
                         prev_base: hyp.prev_base,
                         score: hyp.score + penalty,

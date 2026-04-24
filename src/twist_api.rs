@@ -48,6 +48,26 @@ pub struct SynthesisabilityResponse {
     pub results: Option<Vec<SynthesisabilityResult>>,
 }
 
+// Constructs API -- per Tiffany Dai, Twist TAPI support
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ConstructRequest {
+    pub sequences: Vec<String>,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub construct_type: String,
+    pub vector_mes_uid: String,
+    pub insertion_point_mes_uid: String,
+    pub notes: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ConstructResponse {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub scoring: Option<serde_json::Value>,
+}
+
 impl TwistClient {
     pub fn new(jwt_token: String, end_user_token: String, email: String) -> Self {
         TwistClient {
@@ -92,14 +112,26 @@ impl TwistClient {
         }
     }
 
-    /// Check if SovereignFlow-encoded sequences are synthesizable
-    /// This is free -- no synthesis order placed
+    /// Check synthesizability via /constructs endpoint -- per Tiffany Dai, Twist TAPI
+    /// Uses OLIGO_POOL type as confirmed by Twist support
     pub fn check_synthesizability(
         &self,
         sequences: Vec<OligoSequence>,
-    ) -> Result<Vec<SynthesisabilityResult>, String> {
-        let url = format!("{}/oligos/synthesizability/", TWIST_API_BASE);
-        let payload = SynthesisabilityRequest { sequences };
+    ) -> Result<ConstructResponse, String> {
+        let url = format!("{}/users/{}/constructs/", TWIST_API_BASE, self.email);
+        
+        let seq_strings: Vec<String> = sequences.iter()
+            .map(|s| s.sequence.clone())
+            .collect();
+            
+        let payload = ConstructRequest {
+            sequences: seq_strings,
+            name: "SF-synth-check".to_string(),
+            construct_type: "OLIGO_POOL".to_string(),
+            vector_mes_uid: "na".to_string(),
+            insertion_point_mes_uid: "na".to_string(),
+            notes: "SovereignFlow DNA storage codec synthesizability validation".to_string(),
+        };
 
         let response = self.client
             .post(&url)
@@ -112,11 +144,11 @@ impl TwistClient {
         let body = response.text().unwrap_or_default();
 
         if status.is_success() {
-            let parsed: SynthesisabilityResponse = serde_json::from_str(&body)
+            let parsed: ConstructResponse = serde_json::from_str(&body)
                 .map_err(|e| format!("Parse failed: {} -- body: {}", e, body))?;
-            Ok(parsed.results.unwrap_or_default())
+            Ok(parsed)
         } else {
-            Err(format!("Synthesizability check failed: {} -- {}", status, body))
+            Err(format!("Construct creation failed: {} -- {}", status, body))
         }
     }
 }
@@ -154,27 +186,19 @@ pub fn validate_sovereign_sequences(
 
     println!("\nChecking synthesizability of {} test sequences...", test_sequences.len());
     match client.check_synthesizability(test_sequences) {
-        Ok(results) => {
-            for result in &results {
-                let status = if result.synthesizable.unwrap_or(false) {
-                    "✅ SYNTHESIZABLE"
-                } else {
-                    "❌ NOT SYNTHESIZABLE"
-                };
-                println!("  {} -- {}", result.name, status);
-                if let Some(score) = result.score {
-                    println!("     Score: {:.2}", score);
-                }
-                if let Some(warnings) = &result.warnings {
-                    for w in warnings {
-                        println!("     ⚠️  Warning: {}", w);
-                    }
-                }
-                if let Some(errors) = &result.errors {
-                    for e in errors {
-                        println!("     ❌ Error: {}", e);
-                    }
-                }
+        Ok(response) => {
+            println!("  ✅ Construct created successfully");
+            if let Some(id) = &response.id {
+                println!("  Construct ID: {}", id);
+            }
+            if let Some(name) = &response.name {
+                println!("  Name: {}", name);
+            }
+            if let Some(status) = &response.status {
+                println!("  Status: {}", status);
+            }
+            if let Some(scoring) = &response.scoring {
+                println!("  Scoring: {}", scoring);
             }
             Ok(())
         }

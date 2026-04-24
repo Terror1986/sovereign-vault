@@ -69,3 +69,19 @@ path = "src/bin/twist_test.rs"
 [[bin]]
 name = "gpu_bench"
 path = "src/bin/gpu_bench.rs"
+
+[[bin]]
+name = "hedges_gpu_test"
+path = "src/bin/hedges_gpu_test.rs"
+
+[[bin]]
+name = "hedges_parallel_bench"
+path = "src/bin/hedges_parallel_bench.rs"
+
+[[bin]]
+name = "hedges_full_bench"
+path = "src/bin/hedges_full_bench.rs"
+
+[[bin]]
+name = "single_strand"
+path = "src/bin/single_strand.rs"
