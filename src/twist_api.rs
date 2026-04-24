@@ -112,6 +112,34 @@ impl TwistClient {
         }
     }
 
+
+    /// Retrieve synthesizability scoring for a construct
+    /// GET /constructs/describe/?id__in={id}&scored=True
+    /// Per Tiffany Dai, Twist TAPI support
+    pub fn get_construct_scoring(&self, construct_id: &str) -> Result<serde_json::Value, String> {
+        let url = format!(
+            "{}/users/{}/constructs/describe/?id__in={}&scored=True",
+            TWIST_API_BASE, self.email, construct_id
+        );
+
+        let response = self.client
+            .get(&url)
+            .headers(self.headers())
+            .send()
+            .map_err(|e| format!("Request failed: {}", e))?;
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+
+        if status.is_success() {
+            let parsed: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|e| format!("Parse failed: {} -- body: {}", e, body))?;
+            Ok(parsed)
+        } else {
+            Err(format!("Scoring retrieval failed: {} -- {}", status, body))
+        }
+    }
+
     /// Check synthesizability via /constructs endpoint -- per Tiffany Dai, Twist TAPI
     /// Uses OLIGO_POOL type as confirmed by Twist support
     pub fn check_synthesizability(
@@ -188,8 +216,9 @@ pub fn validate_sovereign_sequences(
     match client.check_synthesizability(test_sequences) {
         Ok(response) => {
             println!("  ✅ Construct created successfully");
-            if let Some(id) = &response.id {
-                println!("  Construct ID: {}", id);
+            let construct_id = response.id.clone().unwrap_or_default();
+            if !construct_id.is_empty() {
+                println!("  Construct ID: {}", construct_id);
             }
             if let Some(name) = &response.name {
                 println!("  Name: {}", name);
@@ -197,8 +226,14 @@ pub fn validate_sovereign_sequences(
             if let Some(status) = &response.status {
                 println!("  Status: {}", status);
             }
-            if let Some(scoring) = &response.scoring {
-                println!("  Scoring: {}", scoring);
+            // Retrieve synthesizability scoring
+            println!("\nRetrieving synthesizability scoring...");
+            match client.get_construct_scoring(&construct_id) {
+                Ok(scoring) => {
+                    println!("  ✅ Scoring retrieved:");
+                    println!("  {}", serde_json::to_string_pretty(&scoring).unwrap_or_default());
+                }
+                Err(e) => println!("  ⚠️  Scoring retrieval: {}", e),
             }
             Ok(())
         }
