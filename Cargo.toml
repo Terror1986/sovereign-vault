@@ -85,3 +85,11 @@ path = "src/bin/hedges_full_bench.rs"
 [[bin]]
 name = "single_strand"
 path = "src/bin/single_strand.rs"
+
+[[bin]]
+name = "get_oligos"
+path = "src/bin/get_oligos.rs"
+
+[[bin]]
+name = "twist_136mer"
+path = "src/bin/twist_136mer.rs"
